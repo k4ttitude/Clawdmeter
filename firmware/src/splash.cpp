@@ -805,7 +805,7 @@ void splash_tick(void) {
     // Scenes: hold the loop for SCENE_LOOP_MS, then let the outro play.
     // Soft switch overran its budget: hard-cut to the host's choice (or the
     // rate pick after a release). Already on the forced animation: just stay.
-    if (host_switch_pending && now >= host_switch_deadline) {
+    if (host_switch_pending && (int32_t)(now - host_switch_deadline) >= 0) {
         host_switch_pending = false;
         if (host_anim_playing()) {
             pending_pick = false;
