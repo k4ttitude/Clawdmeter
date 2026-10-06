@@ -142,9 +142,12 @@ configure_buddy() {
     local sidecar_label="com.user.clawdmeter-sessions"
     local sidecar_plist_src="$SCRIPT_DIR/daemon/$sidecar_label.plist"
     local sidecar_plist_dst="$HOME/Library/LaunchAgents/$sidecar_label.plist"
+    echo "  The session buddy needs the firmware from this branch flashed on the device first."
+    echo "  Older firmware shows \"No data\" after every state change until the next usage poll (up to 60 s)."
     read -r -p "  Mirror Claude Code activity on the splash (installs Claude Code hooks)? [Y/n] " ans || ans=""
     if [[ "$ans" =~ ^[Nn] ]]; then
-        echo "  Session buddy off."
+        echo "  Skipped the session buddy. Nothing was changed; any earlier buddy setup stays as it is."
+        echo "  To remove an earlier setup, see the undo steps in the README."
         return 0
     fi
     echo "  Adding 16 async HTTP hooks to $settings (existing hooks kept)."

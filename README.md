@@ -100,7 +100,7 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 | Idle over 30 min | `expression sleep` (claudepix) |
 | Anything else, or no session or sidecar | the device's own usage-rate rotation |
 
-The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch. Older firmware treats a buddy-only frame as a usage frame with no data and shows "No data" for a moment, so flash first.
+The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch. Older firmware treats every buddy-only frame as a failed usage frame and shows "No data" after every state change until the next usage poll, up to 60 s later, so flash first.
 
 Check that it works:
 
