@@ -24,6 +24,11 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+try:
+    from daemon import buddy   # tests import the package from the repo root
+except ImportError:
+    import buddy               # LaunchAgent runs this file as a script; daemon/ is sys.path[0]
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -31,6 +36,7 @@ REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 
 POLL_INTERVAL = 60
 TICK = 5
+BUDDY_TICK = 1.0   # how often to ask the session sidecar, when hook_port is set
 CONNECT_TIMEOUT = 20.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
@@ -714,6 +720,45 @@ def unpair_macos() -> bool:
     return True
 
 
+class BuddyLink:
+    """Mirrors live Claude Code state onto the splash via BLE field "a".
+
+    Inert when hook_port is unset. Buddy-only frames ({"a": name}) go out only
+    when the name changes; usage payloads always carry the current name, so a
+    rebooted or reconnected device recovers within one poll.
+    """
+
+    def __init__(self, port: int | None) -> None:
+        self.port = port
+        self.anim = ""          # what we believe the device shows
+        self._client = httpx.AsyncClient() if port is not None else None
+        self._logged_error = False
+
+    async def step(self, session: "Session", usage: dict | None) -> None:
+        if self._client is None:
+            return
+        # fetch_anim handles httpx errors itself. Anything else must not tear
+        # down the BLE session, so keep the previous animation and log once.
+        try:
+            anim = await buddy.fetch_anim(self._client, self.port, usage)
+        except Exception as e:
+            if not self._logged_error:
+                self._logged_error = True
+                log(f"Buddy fetch failed, keeping '{self.anim}': {e!r}")
+            return
+        self._logged_error = False
+        if anim != self.anim and await session.write_payload({"a": anim}):
+            self.anim = anim
+
+    def stamp(self, payload: dict) -> None:
+        if self._client is not None:
+            payload["a"] = self.anim
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+
+
 async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     """Connect to a target and poll until disconnected or stopped.
 
@@ -750,6 +795,13 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     log("Connected")
     session = Session(client)
     await session.setup_refresh_subscription()
+    # Created only after the REQ subscription: the firmware marks "has received
+    # data" on ANY write, buddy-only frames included, so an earlier buddy write
+    # would suppress the device's cold-start refresh request.
+    link = BuddyLink(buddy.read_hook_port(CONFIG_FILE))
+    if link.port is not None:
+        log(f"Buddy on: session sidecar at 127.0.0.1:{link.port}")
+    last_usage: dict | None = None
 
     last_poll = 0.0
     used_successfully = False
@@ -768,6 +820,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 # numbers until the CLI re-seeds it.
                 payload, dead = await poll_active()
                 if payload is not None:
+                    last_usage = payload
+                    link.stamp(payload)
                     if await session.write_payload(payload):
                         last_poll = time.time()
                         used_successfully = True
@@ -786,11 +840,16 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     # cycle) -> stay silent and retry next tick.
                     log("No usable config dir this cycle")
 
+            await link.step(session, last_usage)
+
             try:
-                await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
+                await asyncio.wait_for(
+                    session.refresh_requested.wait(),
+                    timeout=BUDDY_TICK if link.port is not None else TICK)
             except asyncio.TimeoutError:
                 pass
     finally:
+        await link.aclose()
         try:
             await client.disconnect()
         except BleakError:
