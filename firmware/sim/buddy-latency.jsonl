@@ -1,0 +1,4 @@
+# Latency check: a host switch must land within HOST_SWITCH_MAX_MS (1.5 s).
+# Screenshot ~2 s after the allow line (about 5 s in) should show allow.
+{"a":"magnifier","name":"magnifier","hold_ms":3000}
+{"a":"allow","name":"allow, must show within 1.5 s","hold_ms":60000}

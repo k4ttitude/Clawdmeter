@@ -103,6 +103,11 @@ static bool     loop_release = false;
 static uint32_t loop_entered_ms = 0;
 static bool     pending_pick = false;   // rotate requested; honor at completion
 #define SCENE_LOOP_MS 6000
+// A permission prompt must show within about 1.5 s, and whole-file loops like
+// magnifier would otherwise take 7 to 10 s to finish before a host switch lands.
+#define HOST_SWITCH_MAX_MS 1500
+static bool     host_switch_pending = false;   // host switch waiting on the outro
+static uint32_t host_switch_deadline = 0;
 
 // ─── Walk translation ────────────────────────────────────────────────────────
 // The walk gaits animate in place; screen travel is ours, locked to the feet:
@@ -150,6 +155,7 @@ static void anim_reset(const splash_anim_def_t *a) {
     in_loop = false;
     loop_release = false;
     pending_pick = false;
+    host_switch_pending = false;    // any real switch completes a pending one
     walk_active = false;
     walk_kind = WALK_NONE;
     if (strcmp(a->name, "crab walking") == 0) walk_kind = WALK_CRAB;
@@ -759,6 +765,8 @@ void splash_init(lv_obj_t *parent) {
 static int  forced_idx = -1;
 static char forced_req[24] = "";
 
+static void pick_now(void);
+
 static void show_anim(int idx) {
     cur_anim = (uint16_t)idx;
     cur_frame = 0;
@@ -788,6 +796,19 @@ void splash_tick(void) {
     if (walk_active) walk_choreo(a);
 
     // Scenes: hold the loop for SCENE_LOOP_MS, then let the outro play.
+    // Soft switch overran its budget: hard-cut to the host's choice (or the
+    // rate pick after a release). Already on the forced animation: just stay.
+    if (host_switch_pending && now >= host_switch_deadline) {
+        host_switch_pending = false;
+        if (forced_idx >= 0 && cur_anim == forced_idx) {
+            pending_pick = false;
+            loop_release = false;
+        } else {
+            pick_now();
+            return;
+        }
+    }
+
     if (forced_idx < 0 && !walk_active && in_loop && !loop_release &&
         now - loop_entered_ms >= SCENE_LOOP_MS)
         loop_release = true;
@@ -796,7 +817,7 @@ void splash_tick(void) {
     // home; everything else releases its loop and switches after the outro.
     if (forced_idx < 0 && now - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
         if (walk_active) {
-            if (walk_phase == 0 && pb_done) splash_pick_for_current_rate();
+            if (walk_phase == 0 && pb_done) pick_now();
         } else {
             loop_release = true;
             pending_pick = true;
@@ -816,7 +837,7 @@ void splash_tick(void) {
     if (next >= a->frame_count) {              // completed the file
         if (pending_pick) {
             pending_pick = false;
-            splash_pick_for_current_rate();
+            pick_now();
             return;
         }
         if (walk_active) {                     // walk finished: stand
@@ -863,7 +884,9 @@ void splash_next(void) {
     Serial.printf("splash: -> %s\n", a->name);
 }
 
-void splash_pick_for_current_rate(void) {
+// Internal pick: always (re)starts the chosen animation. Used for handovers
+// (end-of-file pending_pick, walkers, the host-switch deadline, splash_show).
+static void pick_now(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
     if (forced_idx >= 0) { show_anim(forced_idx); return; }
     int g = usage_rate_group();
@@ -884,10 +907,17 @@ void splash_pick_for_current_rate(void) {
     render_frame(compose_stage(a, 0), a->palette);
 }
 
+// Public pick, called by main when the usage-rate group changes. If the host
+// is already holding the animation that is playing, leave it running.
+void splash_pick_for_current_rate(void) {
+    if (forced_idx >= 0 && cur_anim == forced_idx) return;
+    pick_now();
+}
+
 bool splash_is_active(void) { return active; }
 
 void splash_show(void) {
-    splash_pick_for_current_rate();   // select animation; direct path defers the draw
+    pick_now();   // select animation; direct path defers the draw
     if (splash_container) lv_obj_clear_flag(splash_container, LV_OBJ_FLAG_HIDDEN);
     active = true;
 #if SPLASH_DIRECT_DRAW
@@ -908,13 +938,15 @@ lv_obj_t* splash_get_root(void) {
 }
 
 // Switch the way auto-rotation does: let the current loop run out through its
-// outro, then splash_pick_for_current_rate() lands on the new choice. Walkers
+// outro, then pick_now() lands on the new choice. Walkers
 // can be mid-stage, so they cut straight away.
 static void switch_soon(void) {
     if (!active) return;
-    if (walk_active) { splash_pick_for_current_rate(); return; }
+    if (walk_active) { pick_now(); return; }
     loop_release = true;
     pending_pick = true;
+    host_switch_pending = true;
+    host_switch_deadline = millis() + HOST_SWITCH_MAX_MS;
 }
 
 void splash_set_anim(const char *name) {
