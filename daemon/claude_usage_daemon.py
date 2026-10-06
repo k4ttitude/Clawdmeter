@@ -731,28 +731,54 @@ class BuddyLink:
     def __init__(self, port: int | None) -> None:
         self.port = port
         self.anim = ""          # what we believe the device shows
-        self._client = httpx.AsyncClient() if port is not None else None
+        self._want = ""         # what the sidecar last said it should show
+        # trust_env=False: a macOS system proxy must not capture the loopback GET.
+        self._client = httpx.AsyncClient(trust_env=False) if port is not None else None
         self._logged_error = False
 
-    async def step(self, session: "Session", usage: dict | None) -> None:
+    async def _fetch(self, usage: dict | None) -> None:
+        """Refresh self._want from the sidecar. Never writes to the device."""
         if self._client is None:
             return
         # fetch_anim handles httpx errors itself. Anything else must not tear
         # down the BLE session, so keep the previous animation and log once.
         try:
-            anim = await buddy.fetch_anim(self._client, self.port, usage)
+            self._want = await buddy.fetch_anim(self._client, self.port, usage)
         except Exception as e:
             if not self._logged_error:
                 self._logged_error = True
-                log(f"Buddy fetch failed, keeping '{self.anim}': {e!r}")
+                log(f"Buddy fetch failed, keeping '{self._want}': {e!r}")
             return
         self._logged_error = False
-        if anim != self.anim and await session.write_payload({"a": anim}):
-            self.anim = anim
+
+    async def step(self, session: "Session", usage: dict | None) -> None:
+        if self._client is None:
+            return
+        await self._fetch(usage)
+        if self._want != self.anim and await session.write_payload({"a": self._want}):
+            self.anim = self._want
 
     def stamp(self, payload: dict) -> None:
         if self._client is not None:
-            payload["a"] = self.anim
+            payload["a"] = self._want
+
+    async def send(self, session: "Session", payload: dict) -> bool:
+        """Write a usage or no-data frame stamped with a freshly fetched name.
+
+        The frame itself decides the limit case, so a poll that crosses into or
+        out of quota stamps "limit" (or not) on the same frame. The firmware has
+        one rx buffer, so a buddy-only frame right behind a usage frame can
+        overwrite it; stamping fresh means none is needed. A write that goes
+        through also becomes what we believe the device shows.
+        """
+        if self._client is None:
+            return await session.write_payload(payload)
+        await self._fetch(payload)
+        self.stamp(payload)
+        if await session.write_payload(payload):
+            self.anim = payload["a"]
+            return True
+        return False
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -827,8 +853,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 payload, dead = await poll_active()
                 if payload is not None:
                     last_usage = payload
-                    link.stamp(payload)
-                    if await session.write_payload(payload):
+                    if await link.send(session, payload):
                         last_poll = time.time()
                         used_successfully = True
                         polled_ok = True
@@ -840,7 +865,11 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     # be a healthy link for a full POLL_INTERVAL.
                     log("No usable token; signalling no-data to device — run "
                         "`claude login` or use the CLI to let Claude Code renew it")
-                    if await session.write_payload({"ok": False}):
+                    # No data means no quota state either, so a stale "limit"
+                    # must not outlive it. The beat carries the current "a":
+                    # without one the firmware releases the buddy.
+                    last_usage = None
+                    if await link.send(session, {"ok": False}):
                         last_poll = time.time()
                         polled_ok = True
                 else:

@@ -119,3 +119,69 @@ def test_failed_poll_not_retried_faster_than_tick_with_buddy_on():
 
 def test_failed_dead_token_write_not_retried_faster_than_tick_with_buddy_on():
     assert _count_polls((None, True), False) <= 4
+
+
+def _run_sequence(polls, run_s=0.8):
+    """Drive the real connect_and_run with buddy on, a fake sidecar that says
+    "laptop" (a session in RESPONDING), and a scripted poll_active.
+
+    Returns every dict handed to Session.write_payload, in order. The last poll
+    result repeats once the script runs out.
+    """
+    import httpx
+
+    writes = []
+    script = list(polls)
+
+    async def fake_poll():
+        return script.pop(0) if len(script) > 1 else script[0]
+
+    async def record(_self, payload):
+        writes.append(dict(payload))
+        return True
+
+    def sidecar(_request):
+        # state 3 = RESPONDING, elapsed 0, tool 0 -> buddy.pick() says "laptop"
+        return httpx.Response(200, text='{"ss":[["id","p",3,"",0,"",0]]}')
+
+    real_client = httpx.AsyncClient
+
+    def fake_async_client(**kw):
+        return real_client(transport=httpx.MockTransport(sidecar), **kw)
+
+    async def go():
+        stop = asyncio.Event()
+        task = asyncio.create_task(mod.connect_and_run("addr", stop))
+        await asyncio.sleep(run_s)
+        stop.set()
+        await asyncio.wait_for(task, 3)
+
+    with patch.object(mod, "BleakClient", _FakeClient), \
+         patch.object(mod, "poll_active", fake_poll), \
+         patch.object(mod, "BUDDY_TICK", 0.01), \
+         patch.object(mod, "POLL_INTERVAL", 0.1), \
+         patch.object(mod.httpx, "AsyncClient", fake_async_client), \
+         patch.object(mod.buddy, "read_hook_port", lambda _p: 45999), \
+         patch.object(mod.Session, "write_payload", record):
+        asyncio.run(go())
+    return writes
+
+
+def test_usage_frames_carry_current_anim_and_no_buddy_only_frame_follows():
+    rejected = {"s": 100, "st": "rejected", "ok": True}
+    writes = _run_sequence([
+        (dict(OK), False),       # connect: first usage frame
+        (None, True),            # dead token beat
+        (dict(rejected), False),  # crosses into quota
+        (dict(OK), False),       # and back out
+    ])
+    # (a) the first usage frame already says "laptop"; (b) the dead-token beat
+    # keeps it; (c) the limit state is stamped on the usage frame itself; and
+    # leaving the limit stamps "laptop" again. Never a separate {"a": ...} frame.
+    assert writes[:4] == [
+        {**OK, "a": "laptop"},
+        {"ok": False, "a": "laptop"},
+        {**rejected, "a": "limit"},
+        {**OK, "a": "laptop"},
+    ]
+    assert not [w for w in writes if set(w) == {"a"}], writes
