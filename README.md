@@ -85,6 +85,41 @@ launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # st
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
 
+### Live buddy (optional)
+
+`install-mac.sh` can also mirror what Claude Code is doing onto the splash screen. It installs a loopback hook listener (`daemon/clawdmeter_sessions.py`) as a second LaunchAgent, `com.user.clawdmeter-sessions`, and adds async HTTP hooks to `~/.claude/settings.json`. The installer backs that file up to `~/.claude/settings.json.clawdmeter-backup` first and sets `hook_port = 45999` in `~/.config/claude-usage-monitor/config`. The daemon turns the busiest session's state into an animation name and sends it to the device over BLE in the `"a"` field.
+
+| Session state | Animation |
+|---|---|
+| Thinking or compacting | magnifier |
+| Responding or running a tool | laptop |
+| Finished (needs input, or idle under 3 min) | jumping happy |
+| Waiting for a permission or a question | `allow` (claudepix "?" sprite) |
+| Out of quota | `limit` (claudepix) |
+| Error | `expression surprise` (claudepix) |
+| Idle over 30 min | `expression sleep` (claudepix) |
+| Anything else, or no session or sidecar | the device's own usage-rate rotation |
+
+The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch. Older firmware treats a buddy-only frame as a usage frame with no data and shows "No data" for a moment, so flash first.
+
+Check that it works:
+
+```bash
+launchctl list | grep clawdmeter-sessions            # the sidecar is loaded
+curl -s http://127.0.0.1:45999/                      # the sidecar answers
+tail -F ~/Library/Logs/clawdmeter-sessions.err.log   # sidecar log (stdout goes to clawdmeter-sessions.out.log)
+```
+
+To undo it:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.user.clawdmeter-sessions.plist
+```
+
+Then remove the `127.0.0.1:45999` hook entries from `~/.claude/settings.json` (or copy `~/.claude/settings.json.clawdmeter-backup` back over it) and delete the `hook_port` line from `~/.config/claude-usage-monitor/config`.
+
+The session sidecar comes from upstream's `feature/live-sessions` branch. The four claudepix sprites (`allow`, `limit`, `expression surprise`, `expression sleep`) come from juppee's fork and claudepix.
+
 ## Linux installation
 
 ### Flash the firmware
