@@ -132,10 +132,47 @@ configure_chime() {
     fi
 }
 
+# Offer the live buddy: a loopback hook listener (the session sidecar) plus 16
+# async HTTP hooks in ~/.claude/settings.json. Opt-in, [Y/n] like the scan
+# prompt below; skipped on a non-interactive shell like the other prompts.
+configure_buddy() {
+    [ -t 0 ] || { echo "  Non-interactive shell - skipping the session buddy."; return 0; }
+    local ans port=45999 settings="$HOME/.claude/settings.json"
+    local sidecar_py="$SCRIPT_DIR/daemon/clawdmeter_sessions.py"
+    local sidecar_label="com.user.clawdmeter-sessions"
+    local sidecar_plist_src="$SCRIPT_DIR/daemon/$sidecar_label.plist"
+    local sidecar_plist_dst="$HOME/Library/LaunchAgents/$sidecar_label.plist"
+    read -r -p "  Mirror Claude Code activity on the splash (installs Claude Code hooks)? [Y/n] " ans || ans=""
+    if [[ "$ans" =~ ^[Nn] ]]; then
+        echo "  Session buddy off."
+        return 0
+    fi
+    echo "  Adding 16 async HTTP hooks to $settings (existing hooks kept)."
+    echo "  Backup: $settings.clawdmeter-backup"
+    if ! "$PYTHON_BIN" "$sidecar_py" --install-hooks "$settings" "http://127.0.0.1:$port/"; then
+        echo "  Warning: could not install the hooks - skipping the session buddy."
+        return 0
+    fi
+    upsert_config_key hook_port "$port"
+    echo "  Set: hook_port = $port"
+    mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
+    sed \
+        -e "s|__PYTHON_BIN__|${PYTHON_BIN}|g" \
+        -e "s|__SIDECAR_PATH__|${sidecar_py}|g" \
+        -e "s|__REPO_DIR__|${SCRIPT_DIR}|g" \
+        -e "s|__LOG_OUT__|${LOG_DIR}/clawdmeter-sessions.out.log|g" \
+        -e "s|__LOG_ERR__|${LOG_DIR}/clawdmeter-sessions.err.log|g" \
+        -e "s|__HOME__|${HOME}|g" \
+        "$sidecar_plist_src" > "$sidecar_plist_dst"
+    launchctl unload "$sidecar_plist_dst" 2>/dev/null || true
+    launchctl load -w "$sidecar_plist_dst"
+    echo "  Loaded: $sidecar_label"
+}
+
 echo "=== Clawdmeter macOS install ==="
 echo ""
 
-echo "[1/6] Checking prerequisites..."
+echo "[1/7] Checking prerequisites..."
 command -v curl >/dev/null || { echo "Error: curl is required"; exit 1; }
 
 # The daemon uses Python 3.10+ syntax (PEP 604 `X | None`). macOS ships an
@@ -178,7 +215,7 @@ fi
 echo "  OK"
 echo ""
 
-echo "[2/6] Creating Python virtualenv at daemon/.venv ..."
+echo "[2/7] Creating Python virtualenv at daemon/.venv ..."
 # Recreate the venv if it's missing or was built with an interpreter older
 # than 3.10 (e.g. a previous run that picked the system python3).
 if [ -d "$VENV_DIR" ] && ! py_ge_310 "$VENV_DIR/bin/python"; then
@@ -194,7 +231,7 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 echo "  OK ($PYTHON_BIN)"
 echo ""
 
-echo "[3/6] Rendering launchd plist..."
+echo "[3/7] Rendering launchd plist..."
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
 sed \
     -e "s|__PYTHON_BIN__|${PYTHON_BIN}|g" \
@@ -209,13 +246,17 @@ echo ""
 
 # Interactive daemon configuration: which plans to poll, plus the optional
 # clock display and session-reset chime. All re-read by the daemon each poll.
-echo "[4/6] Configuring the daemon..."
+echo "[4/7] Configuring the daemon..."
 configure_config_dirs
 configure_clock
 configure_chime
 echo ""
 
-echo "[5/6] Bluetooth permission check..."
+echo "[5/7] Session buddy (optional)..."
+configure_buddy
+echo ""
+
+echo "[6/7] Bluetooth permission check..."
 echo "  On first run the daemon will trigger a Bluetooth permission prompt."
 echo "  macOS only prompts for foreground processes — so we'll run it"
 echo "  interactively once below. Press Ctrl+C after you see 'Scanning...'"
@@ -250,7 +291,7 @@ if command -v blueutil >/dev/null 2>&1; then
 fi
 echo ""
 
-echo "[6/6] Loading launchd service..."
+echo "[7/7] Loading launchd service..."
 launchctl unload "$PLIST_DST" 2>/dev/null || true
 launchctl load -w "$PLIST_DST"
 echo "  Loaded."
