@@ -87,15 +87,15 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 
 ### Live buddy (optional)
 
-`install-mac.sh` can also mirror what Claude Code is doing onto the splash screen. It installs a loopback hook listener (`daemon/clawdmeter_sessions.py`) as a second LaunchAgent, `com.user.clawdmeter-sessions`, and adds async HTTP hooks to `~/.claude/settings.json`. The installer backs that file up to `~/.claude/settings.json.clawdmeter-backup` first and sets `hook_port = 45999` in `~/.config/claude-usage-monitor/config`. The daemon turns the busiest session's state into an animation name and sends it to the device over BLE in the `"a"` field.
+`install-mac.sh` can also mirror what Claude Code is doing onto the splash screen. It installs a loopback hook listener (`daemon/clawdmeter_sessions.py`) as a second LaunchAgent, `com.user.clawdmeter-sessions`, and adds async HTTP hooks to `~/.claude/settings.json`. The installer backs that file up to `~/.claude/settings.json.clawdmeter-backup` first and sets `hook_port = 45999` in `~/.config/claude-usage-monitor/config`. The daemon turns the state of the session that most needs your attention (waiting beats working beats idle) into an animation name and sends it to the device over BLE in the `"a"` field.
 
 | Session state | Animation |
 |---|---|
+| Out of quota (wins over every row below, including no session or sidecar) | `limit` (claudepix) |
 | Thinking or compacting | magnifier |
 | Responding or running a tool | laptop |
 | Finished (needs input, or idle under 3 min) | jumping happy |
 | Waiting for a permission or a question | `allow` (claudepix "?" sprite) |
-| Out of quota | `limit` (claudepix) |
 | Error | `expression surprise` (claudepix) |
 | Idle over 30 min | `expression sleep` (claudepix) |
 | Anything else, or no session or sidecar | the device's own usage-rate rotation |
@@ -107,18 +107,21 @@ Check that it works:
 ```bash
 launchctl list | grep clawdmeter-sessions            # the sidecar is loaded
 curl -s http://127.0.0.1:45999/                      # the sidecar answers
-tail -F ~/Library/Logs/clawdmeter-sessions.err.log   # sidecar log (stdout goes to clawdmeter-sessions.out.log)
+tail -F ~/Library/Logs/clawdmeter-sessions.out.log   # sidecar log
 ```
+
+Crashes and tracebacks go to `~/Library/Logs/clawdmeter-sessions.err.log`.
 
 To undo it:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.user.clawdmeter-sessions.plist
+launchctl unload -w ~/Library/LaunchAgents/com.user.clawdmeter-sessions.plist
+rm ~/Library/LaunchAgents/com.user.clawdmeter-sessions.plist
 ```
 
-Then remove the `127.0.0.1:45999` hook entries from `~/.claude/settings.json` (or copy `~/.claude/settings.json.clawdmeter-backup` back over it) and delete the `hook_port` line from `~/.config/claude-usage-monitor/config`.
+The `-w` keeps it from loading again at the next login. Then remove the `127.0.0.1:45999` hook entries from `~/.claude/settings.json` (or copy `~/.claude/settings.json.clawdmeter-backup` back over it) and delete the `hook_port` line from `~/.config/claude-usage-monitor/config`.
 
-The session sidecar comes from upstream's `feature/live-sessions` branch. The four claudepix sprites (`allow`, `limit`, `expression surprise`, `expression sleep`) come from juppee's fork and claudepix.
+The session sidecar comes from upstream's `feature/live-sessions` branch. The four claudepix sprites (`allow`, `limit`, `expression surprise`, `expression sleep`) come from juppeee's fork and claudepix.
 
 ## Linux installation
 
