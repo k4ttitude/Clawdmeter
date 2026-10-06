@@ -1,5 +1,6 @@
 #include "splash.h"
 #include "splash_animations.h"
+#include "buddy_animations.h"
 #include "splash_geometry.h"
 #include "theme.h"
 #include "usage_rate.h"
@@ -8,6 +9,15 @@
 #include <Arduino.h>
 #include <string.h>
 #include <esp_heap_caps.h>
+
+// Official art first, then the buddy sprites. Indices past SPLASH_ANIM_COUNT
+// address buddy_anims[]; the mini creature and the corner mascot stay on the
+// official table only.
+#define ANIM_TOTAL (SPLASH_ANIM_COUNT + BUDDY_ANIM_COUNT)
+static inline const splash_anim_def_t* anim_at(int i) {
+    return i < SPLASH_ANIM_COUNT ? &splash_anims[i]
+                                 : &buddy_anims[i - SPLASH_ANIM_COUNT];
+}
 
 // 60×60 stage. CELL sized so the canvas fits the smaller display dimension —
 // the canvas is square and centered, so on portrait or letterboxed panels
@@ -743,6 +753,22 @@ void splash_init(lv_obj_t *parent) {
     lv_obj_add_flag(splash_container, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Host-driven animation (see splash_set_anim). -1 = no override, the usage-rate
+// groups decide. forced_req remembers what the host last asked for, so a frame
+// repeating the same name is a no-op rather than a restart.
+static int  forced_idx = -1;
+static char forced_req[24] = "";
+
+static void show_anim(int idx) {
+    cur_anim = (uint16_t)idx;
+    cur_frame = 0;
+    frame_started_ms = millis();
+    last_pick_ms = frame_started_ms;
+    const splash_anim_def_t *a = anim_at(cur_anim);
+    anim_reset(a);
+    render_frame(compose_stage(a, 0), a->palette);
+}
+
 void splash_tick(void) {
     if (!active || SPLASH_ANIM_COUNT == 0) return;
     const uint32_t now = millis();
@@ -751,24 +777,24 @@ void splash_tick(void) {
     // Deferred full repaint after a (re)show — runs now that LVGL has drawn the
     // black background this loop iteration.
     if (force_full) {
-        const splash_anim_def_t *fa = &splash_anims[cur_anim];
+        const splash_anim_def_t *fa = anim_at(cur_anim);
         if (fa->frame_count) render_frame(compose_stage(fa, cur_frame), fa->palette);
     }
 #endif
 
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
+    const splash_anim_def_t *a = anim_at(cur_anim);
     if (a->frame_count == 0) return;
 
     if (walk_active) walk_choreo(a);
 
     // Scenes: hold the loop for SCENE_LOOP_MS, then let the outro play.
-    if (!walk_active && in_loop && !loop_release &&
+    if (forced_idx < 0 && !walk_active && in_loop && !loop_release &&
         now - loop_entered_ms >= SCENE_LOOP_MS)
         loop_release = true;
 
     // Auto-rotate — never a hard cut. Walkers switch only while standing at
     // home; everything else releases its loop and switches after the outro.
-    if (now - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
+    if (forced_idx < 0 && now - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
         if (walk_active) {
             if (walk_phase == 0 && pb_done) splash_pick_for_current_rate();
         } else {
@@ -827,11 +853,11 @@ void splash_tick(void) {
 
 void splash_next(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
-    cur_anim = (cur_anim + 1) % SPLASH_ANIM_COUNT;
+    cur_anim = (cur_anim + 1) % ANIM_TOTAL;
     cur_frame = 0;
     frame_started_ms = millis();
     last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
+    const splash_anim_def_t *a = anim_at(cur_anim);
     anim_reset(a);
     render_frame(compose_stage(a, 0), a->palette);
     Serial.printf("splash: -> %s\n", a->name);
@@ -839,6 +865,7 @@ void splash_next(void) {
 
 void splash_pick_for_current_rate(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
+    if (forced_idx >= 0) { show_anim(forced_idx); return; }
     int g = usage_rate_group();
     if (g < 0 || g >= GROUP_COUNT) g = 0;
     if (group_size[g] == 0) return;
@@ -852,7 +879,7 @@ void splash_pick_for_current_rate(void) {
     cur_frame = 0;
     frame_started_ms = millis();
     last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
+    const splash_anim_def_t *a = anim_at(cur_anim);
     anim_reset(a);
     render_frame(compose_stage(a, 0), a->palette);
 }
@@ -878,4 +905,38 @@ void splash_hide(void) {
 
 lv_obj_t* splash_get_root(void) {
     return splash_container;
+}
+
+// Switch the way auto-rotation does: let the current loop run out through its
+// outro, then splash_pick_for_current_rate() lands on the new choice. Walkers
+// can be mid-stage, so they cut straight away.
+static void switch_soon(void) {
+    if (!active) return;
+    if (walk_active) { splash_pick_for_current_rate(); return; }
+    loop_release = true;
+    pending_pick = true;
+}
+
+void splash_set_anim(const char *name) {
+    if (!name) name = "";
+    if (strncmp(name, forced_req, sizeof(forced_req)) == 0) return;   // unchanged
+    strlcpy(forced_req, name, sizeof(forced_req));
+
+    if (name[0] == '\0') {
+        forced_idx = -1;
+        Serial.println("splash: host released, back to usage-rate groups");
+        switch_soon();
+        return;
+    }
+    for (int i = 0; i < ANIM_TOTAL; i++) {
+        if (strcmp(anim_at(i)->name, name) == 0) {
+            forced_idx = i;
+            Serial.printf("splash: host -> %s\n", name);
+            switch_soon();
+            return;
+        }
+    }
+    // Host newer than firmware: keep what's playing rather than blanking.
+    forced_idx = -1;
+    Serial.printf("splash: host asked for unknown anim '%s', ignoring\n", name);
 }

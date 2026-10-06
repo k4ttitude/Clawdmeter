@@ -21,6 +21,12 @@ void splash_hide(void);
 // trigger a re-pick when the rate group changes mid-display.
 void splash_pick_for_current_rate(void);
 
+// Host-driven animation (BLE field "a"). Plays the named animation from either
+// table and suspends usage-rate rotation until released. "" hands control back
+// to the device; an unknown name keeps the current animation and is logged;
+// repeating the current name is a no-op.
+void splash_set_anim(const char *name);
+
 // True when splash is currently rendering (used to gate re-picks).
 bool splash_is_active(void);
 

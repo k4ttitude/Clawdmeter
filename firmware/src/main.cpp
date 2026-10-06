@@ -124,6 +124,19 @@ static bool parse_json(const char* json, UsageData* out) {
     return true;
 }
 
+// Host-named splash animation ("a"). Buddy-only frames ({"a":...} with no
+// "ok") arrive between usage polls and must not touch usage: parse_json would
+// default ok to false ("No data") and feed usage_rate an extra sample, and its
+// 6-slot ring needs 240 s of span.
+enum AnimFrame { ANIM_ABSENT, ANIM_WITH_USAGE, ANIM_ONLY };
+static AnimFrame parse_anim(const char* json, char* out, size_t n) {
+    JsonDocument doc;
+    if (deserializeJson(doc, json)) return ANIM_ABSENT;
+    if (!doc["a"].is<const char*>()) return ANIM_ABSENT;
+    strlcpy(out, doc["a"].as<const char*>(), n);
+    return doc["ok"].isNull() ? ANIM_ONLY : ANIM_WITH_USAGE;
+}
+
 // ---- Serial command buffer ----
 #define CMD_BUF_SIZE 64
 static char cmd_buf[CMD_BUF_SIZE];
@@ -372,7 +385,13 @@ void loop() {
     check_serial_cmd();
 
     if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+        const char* raw = ble_get_data();
+        char anim[24] = "";
+        AnimFrame af = parse_anim(raw, anim, sizeof(anim));
+        if (af == ANIM_ONLY) {
+            splash_set_anim(anim);
+            ble_send_ack();
+        } else if (parse_json(raw, &usage)) {
             int g_before = usage_rate_group();
             bool session_reset = usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();
@@ -388,6 +407,8 @@ void loop() {
                     g_before, g_after, usage.session_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
+            // Absent "a" (stock daemon, buddy off) hands control back.
+            splash_set_anim(af == ANIM_WITH_USAGE ? anim : "");
             ui_update(&usage);
             ble_send_ack();
         } else {

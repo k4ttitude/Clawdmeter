@@ -1,0 +1,8 @@
+# Buddy scenario: usage carrying "a" (official art), a long official hold,
+# buddy-only frames (buddy table), an unknown name, release.
+{"s":40,"sr":120,"w":20,"wr":3000,"st":"allowed","ok":true,"a":"laptop","name":"usage+laptop","hold_ms":3000}
+{"a":"magnifier","name":"thinking, held past the scene timer and rotation","hold_ms":25000}
+{"a":"allow","name":"permission","hold_ms":3000}
+{"a":"no such anim","name":"unknown","hold_ms":3000}
+{"a":"limit","name":"limit","hold_ms":3000}
+{"a":"","name":"released","hold_ms":3000}
