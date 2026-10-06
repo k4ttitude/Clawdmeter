@@ -62,7 +62,7 @@ static const uint16_t buddy_expression_sleep_holds[5] = {180,180,180,180,180};
 #define BUDDY_ANIM_COUNT 4
 static const splash_anim_def_t buddy_anims[BUDDY_ANIM_COUNT] = {
     {"allow", "buddy", 30, 34, 13, 3, 8, 0, 7, 6, buddy_allow_palette, buddy_allow_frames, buddy_allow_holds},
-    {"limit", "buddy", 40, 40, 8, 0, 8, 0, 7, 5, buddy_limit_palette, buddy_limit_frames, buddy_limit_holds},
+    {"limit", "buddy", 40, 40, 8, 3, 8, 0, 7, 5, buddy_limit_palette, buddy_limit_frames, buddy_limit_holds},
     {"expression surprise", "buddy", 40, 34, 8, 3, 11, 0, 10, 3, buddy_expression_surprise_palette, buddy_expression_surprise_frames, buddy_expression_surprise_holds},
     {"expression sleep", "buddy", 30, 34, 13, 3, 5, 0, 4, 3, buddy_expression_sleep_palette, buddy_expression_sleep_frames, buddy_expression_sleep_holds},
 };

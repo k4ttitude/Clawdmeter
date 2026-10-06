@@ -66,6 +66,34 @@ def test_centred_and_standing_on_the_official_ground_line():
     assert c.ox > 0 and c.ox + c.w != 55   # avoid compose_stage's edge pins
 
 
+def test_feet_not_detached_mark_land_on_ground_line():
+    # Body: rows 5-10, cols 8-10 (18 cells). A detached mark in the same colour
+    # at col 14, rows 5-12 (8 cells) hangs lower than the body's feet.
+    cells = [1] * 400
+    for r in range(5, 11):
+        for c in (8, 9, 10):
+            cells[r * 20 + c] = 2
+    for r in range(5, 13):
+        cells[r * 20 + 14] = 2
+    frame = "{" + ",".join(map(str, cells)) + "}"
+    text = f"""
+static const uint16_t splash_csb_m_palette[10] = {{0x0000,0x0000,0xDBAA,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000}};
+static const uint8_t splash_csb_m_frames[1][400] = {{
+    {frame},
+}};
+static const uint16_t splash_csb_m_holds[1] = {{180}};
+#define SPLASH_ANIM_COUNT 1
+static const splash_anim_def_t splash_anims[SPLASH_ANIM_COUNT] = {{
+    {{"m", "Session Browser", 1, splash_csb_m_palette, splash_csb_m_frames, splash_csb_m_holds}},
+}};
+"""
+    c = mod.convert(mod.parse_header(text)[0], scale=2)
+    assert c.h == 16                       # rows 5..12 x2: the mark sets the crop
+    body_feet_row = 11 + c.oy + (10 - 5 + 1) * 2   # bottom edge of body row 10
+    assert body_feet_row == 48
+    assert 11 + c.oy + c.h > 48            # the mark hangs below the ground line
+
+
 def test_loop_region_is_whole_file():
     c = mod.convert(mod.parse_header(FIXTURE)[0], scale=2)
     assert (c.loop_start, c.loop_end) == (0, 1)

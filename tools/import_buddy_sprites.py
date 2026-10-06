@@ -12,6 +12,11 @@ compose_stage). Each animation is:
   3. upscaled `scale`x with nearest neighbour,
   4. centred horizontally, feet on the stage bottom like official Clawd
      (ox/oy are stage coordinates; oy is clamped at 0 for very tall art).
+     "Feet" is the lowest row of the largest 4-connected blob of non-background
+     cells in frame 0, not the bbox bottom: detached marks ("!" on `limit`,
+     the "?" on `allow`) can hang below or float above the body. Colour is no
+     help here, the marks share the body colour. Marks that hang below the feet
+     simply extend past the stage bottom; the grid has room.
 
 The loop region is the whole file: these sprites have no intro or outro.
 Only the names in KEEP are emitted: the buddy states the official art has no
@@ -83,6 +88,33 @@ def select(anims, names):
     return [by_name[n] for n in names]
 
 
+def feet_row(frame):
+    """Lowest row (0-based, in the frame's own coordinates) of the largest
+    4-connected component of non-background cells. Ties go to the first blob
+    found in row-major order. Returns None for an empty frame."""
+    seen = [False] * (SRC_W * SRC_W)
+    best, best_size = None, 0
+    for start in range(SRC_W * SRC_W):
+        if not frame[start] or seen[start]:
+            continue
+        stack, size, lowest = [start], 0, 0
+        seen[start] = True
+        while stack:
+            i = stack.pop()
+            size += 1
+            r, c = divmod(i, SRC_W)
+            lowest = max(lowest, r)
+            for rr, cc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                if 0 <= rr < SRC_W and 0 <= cc < SRC_W:
+                    j = rr * SRC_W + cc
+                    if frame[j] and not seen[j]:
+                        seen[j] = True
+                        stack.append(j)
+        if size > best_size:
+            best, best_size = lowest, size
+    return best
+
+
 def convert(anim, scale=2):
     # 1. background remap + palette compaction
     used = sorted({c for f in anim.frames for c in f})
@@ -111,11 +143,14 @@ def convert(anim, scale=2):
         scaled.append([f[(r0 + y // scale) * SRC_W + (c0 + x // scale)]
                        for y in range(h) for x in range(w)])
 
-    # 4. centre horizontally, stand on the stage bottom (see compose_stage)
+    # 4. centre horizontally, stand the body's feet on the stage bottom (see
+    # compose_stage). Feet come from frame 0's largest blob, scaled with the crop.
     if w > 50 or h > 49:
         raise ValueError(f"{anim.name}: {w}x{h} does not fit the stage")
     ox = (GRID - w) // 2 - ANCHOR_X
-    oy = max(0, STAGE_H - h)
+    feet_src = feet_row(frames[0])
+    feet_scaled = (feet_src - r0 + 1) * scale - 1 if feet_src is not None else h - 1
+    oy = max(0, STAGE_H - (feet_scaled + 1))
 
     ident = re.sub(r"\W+", "_", anim.name).strip("_")
     return Converted(anim.name, ident, w, h, ox, oy, 0, len(frames) - 1,
