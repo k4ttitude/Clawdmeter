@@ -61,6 +61,18 @@ void sim_pump(void) {
         edge_long = true;
     }
 
+    // Headless hook: SIM_PWR_TAP_MS=<ms> → one short PWR press at that time.
+    static long pwr_tap_ms = -2;
+    if (pwr_tap_ms == -2) {
+        const char* v = getenv("SIM_PWR_TAP_MS");
+        pwr_tap_ms = v ? atol(v) : -1;
+    }
+    if (pwr_tap_ms >= 0 && millis() >= (uint32_t)pwr_tap_ms) {
+        edge_pressed = true;
+        edge_released = true;
+        pwr_tap_ms = -1;
+    }
+
     // Headless CI hook: SIM_AUTOSHOT_MS=<ms> → screenshot + exit.
     static long autoshot_ms = -2;
     if (autoshot_ms == -2) {

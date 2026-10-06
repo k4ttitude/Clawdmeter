@@ -1,0 +1,4 @@
+# Unknown name right after a switch: the pending switch to allow must survive.
+# Shot at ~6 s should show allow (before the fix it showed a rate pick).
+{"a":"allow","name":"allow","hold_ms":300}
+{"a":"no such anim","name":"unknown, must not cancel the pending allow","hold_ms":60000}

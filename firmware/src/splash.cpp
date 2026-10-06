@@ -767,6 +767,13 @@ static char forced_req[24] = "";
 
 static void pick_now(void);
 
+// True while the host's animation is what is on screen. Only then are the scene
+// timer and auto-rotation held; a PWR-picked animation (splash_next) rotates
+// and releases as usual, and the next pick lands back on the host's choice.
+static inline bool host_anim_playing(void) {
+    return forced_idx >= 0 && cur_anim == forced_idx;
+}
+
 static void show_anim(int idx) {
     cur_anim = (uint16_t)idx;
     cur_frame = 0;
@@ -800,7 +807,7 @@ void splash_tick(void) {
     // rate pick after a release). Already on the forced animation: just stay.
     if (host_switch_pending && now >= host_switch_deadline) {
         host_switch_pending = false;
-        if (forced_idx >= 0 && cur_anim == forced_idx) {
+        if (host_anim_playing()) {
             pending_pick = false;
             loop_release = false;
         } else {
@@ -809,13 +816,13 @@ void splash_tick(void) {
         }
     }
 
-    if (forced_idx < 0 && !walk_active && in_loop && !loop_release &&
+    if (!host_anim_playing() && !walk_active && in_loop && !loop_release &&
         now - loop_entered_ms >= SCENE_LOOP_MS)
         loop_release = true;
 
     // Auto-rotate — never a hard cut. Walkers switch only while standing at
     // home; everything else releases its loop and switches after the outro.
-    if (forced_idx < 0 && now - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
+    if (!host_anim_playing() && now - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
         if (walk_active) {
             if (walk_phase == 0 && pb_done) pick_now();
         } else {
@@ -910,7 +917,7 @@ static void pick_now(void) {
 // Public pick, called by main when the usage-rate group changes. If the host
 // is already holding the animation that is playing, leave it running.
 void splash_pick_for_current_rate(void) {
-    if (forced_idx >= 0 && cur_anim == forced_idx) return;
+    if (host_anim_playing()) return;
     pick_now();
 }
 
@@ -968,7 +975,8 @@ void splash_set_anim(const char *name) {
             return;
         }
     }
-    // Host newer than firmware: keep what's playing rather than blanking.
-    forced_idx = -1;
+    // Host newer than firmware: leave forced_idx and any pending switch alone, so
+    // what is playing, or about to play, stays. forced_req keeps the name so a
+    // repeat of it is a no-op.
     Serial.printf("splash: host asked for unknown anim '%s', ignoring\n", name);
 }

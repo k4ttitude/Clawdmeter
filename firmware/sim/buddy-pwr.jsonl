@@ -1,0 +1,3 @@
+# Host holds allow; a PWR tap (SIM_PWR_TAP_MS=6000) picks the next animation.
+# That one must rotate away after the usual 20 s and land back on allow.
+{"a":"allow","name":"allow held by host","hold_ms":60000}

@@ -385,7 +385,10 @@ void loop() {
     check_serial_cmd();
 
     if (ble_has_data()) {
-        const char* raw = ble_get_data();
+        // ble_get_data() is the BLE host task's live rx_buf (512 B, see ble.cpp);
+        // a write can land mid-loop. Snapshot once so both parses see one frame.
+        char raw[512];
+        strlcpy(raw, ble_get_data(), sizeof(raw));
         char anim[24] = "";
         AnimFrame af = parse_anim(raw, anim, sizeof(anim));
         if (af == ANIM_ONLY) {
