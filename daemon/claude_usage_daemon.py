@@ -804,13 +804,19 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     last_usage: dict | None = None
 
     last_poll = 0.0
+    # A failed or empty poll is retried no sooner than TICK later, whatever the
+    # loop cadence. The buddy ticks at BUDDY_TICK (1 s); without this gate a 429
+    # or a dead token would hit Keychain and the API every second.
+    next_poll_try = 0.0
     used_successfully = False
     try:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
             elapsed = now - last_poll
-            if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
+            if now >= next_poll_try and (
+                    session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL):
                 session.refresh_requested.clear()
+                polled_ok = False
                 # Pure free-ride: read whatever access token(s) Claude Code
                 # currently holds across the configured config dirs and NEVER
                 # refresh them ourselves. Claude Code (the token's owner) does all
@@ -825,6 +831,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     if await session.write_payload(payload):
                         last_poll = time.time()
                         used_successfully = True
+                        polled_ok = True
                 elif dead:
                     # No live token in any config dir (missing, or a 401/expired
                     # token) -> show "No data" now instead of stale numbers. Guard
@@ -835,19 +842,27 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                         "`claude login` or use the CLI to let Claude Code renew it")
                     if await session.write_payload({"ok": False}):
                         last_poll = time.time()
+                        polled_ok = True
                 else:
                     # Transient poll failure (a live token that didn't answer this
                     # cycle) -> stay silent and retry next tick.
                     log("No usable config dir this cycle")
+                if not polled_ok:
+                    next_poll_try = time.time() + TICK
 
             await link.step(session, last_usage)
 
-            try:
-                await asyncio.wait_for(
-                    session.refresh_requested.wait(),
-                    timeout=BUDDY_TICK if link.port is not None else TICK)
-            except asyncio.TimeoutError:
-                pass
+            tick = BUDDY_TICK if link.port is not None else TICK
+            if session.refresh_requested.is_set() and time.time() < next_poll_try:
+                # A device refresh request is parked until the retry gate opens;
+                # waiting on the already-set event would spin the loop.
+                await asyncio.sleep(tick)
+            else:
+                try:
+                    await asyncio.wait_for(
+                        session.refresh_requested.wait(), timeout=tick)
+                except asyncio.TimeoutError:
+                    pass
     finally:
         await link.aclose()
         try:
