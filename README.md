@@ -100,7 +100,7 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 | Idle over 30 min | `expression sleep` (claudepix) |
 | Anything else, or no session or sidecar | the device's own usage-rate rotation |
 
-The same state becomes a short line of text under the animation, sent in the `"x"` field. It is at most 32 characters of plain ASCII and the device cuts anything longer with dots. Examples:
+The same state becomes a short line of text under the animation, sent in the `"x"` field. It is plain ASCII. The daemon cuts it at 32 characters and ends a cut line with `...`, and the device clips it again to the panel width. Examples:
 
 | Session state | Text |
 |---|---|
@@ -111,9 +111,10 @@ The same state becomes a short line of text under the animation, sent in the `"x
 | Using a connector | `Using Amplitude` |
 | Waiting for a permission | `Permission: Editing code` |
 | Finished | `Done` |
+| Idle over 30 min | `Sleeping` |
 | Out of quota | `Out of quota` |
 
-The text comes from fixed phrases, the service name of an MCP connector, and the `description` Claude Code writes for each Bash call, usually a few words about what the command does. That description is the one piece of tool input the device shows. Command lines, file paths and prompts are never sent. No session, or idle between 3 and 30 min, shows no text.
+The text comes from fixed phrases, the service name of an MCP connector, and the `description` Claude Code writes for each Bash call, usually a few words about what the command does. The description is shown as Claude wrote it, so it can mention file names or paths. Command lines, prompts and all other tool input are never sent. No session, or idle between 3 and 30 min, shows no text.
 
 The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch, which also draws the text. Older firmware treats every buddy-only frame as a failed usage frame and shows "No data" after every state change until the next usage poll, up to 60 s later, so flash first.
 
@@ -122,8 +123,11 @@ Check that it works:
 ```bash
 launchctl list | grep clawdmeter-sessions            # the sidecar is loaded
 curl -s http://127.0.0.1:45999/                      # the sidecar answers
+curl -s http://127.0.0.1:45999/top                   # what the buddy reads
 tail -F ~/Library/Logs/clawdmeter-sessions.out.log   # sidecar log
 ```
+
+`/top` shows the one session the buddy follows. A sidecar started before this feature answers it with the `{"ss":...}` list instead. The buddy still works from that list but has no tool names, so restart the sidecar with `launchctl kickstart -k gui/$UID/com.user.clawdmeter-sessions`.
 
 Crashes and tracebacks go to `~/Library/Logs/clawdmeter-sessions.err.log`.
 
@@ -285,7 +289,7 @@ JSON payload format (written to RX):
 { "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true }
 ```
 
-Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
+Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag, `a` = buddy animation name (`""` hands the splash back to the device), `x` = buddy action text under the animation (ASCII, at most 32 characters, `""` hides it).
 
 ## Development
 
