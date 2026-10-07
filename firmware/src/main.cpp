@@ -370,6 +370,11 @@ void loop() {
 
     ble_state_t bs = ble_get_state();
     if (bs != last_ble_state) {
+        // Leaving CONNECTED hides the action text: nothing is left to refresh it,
+        // so it would keep describing a session the host can no longer see. Only
+        // the text goes. The animation keeps its older behaviour. A new
+        // connection restamps both on its first usage frame.
+        if (last_ble_state == BLE_STATE_CONNECTED && bs != BLE_STATE_CONNECTED) splash_set_text("");
         last_ble_state = bs;
         ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
     }
