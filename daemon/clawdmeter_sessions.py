@@ -417,6 +417,7 @@ class Session:
     __slots__ = (
         "session_id", "sid", "state", "state_since", "last_event_at",
         "roster_name", "cwd", "transcript_path", "current_tool", "open_tools",
+        "current_detail",  # Clawdmeter fork: Bash description, for GET /top
         "nagents", "tdone", "ttotal", "ctx", "tok", "model", "missing_since",
     )
 
@@ -430,6 +431,7 @@ class Session:
         self.cwd = None
         self.transcript_path = None
         self.current_tool = None   # last tool NAME; survives PostToolUse
+        self.current_detail = None  # Clawdmeter fork: Bash description, for GET /top
         self.open_tools = []       # OPEN tool_use_ids — concurrent, not cumulative
         self.nagents = 0
         self.tdone = 0
@@ -506,6 +508,7 @@ class SessionTable:
         elif event == "UserPromptSubmit":
             # A new turn: the previous turn's tool is genuinely over.
             sess.current_tool = None
+            sess.current_detail = None  # Clawdmeter fork: cleared with current_tool
             sess.open_tools.clear()
             self._set_state(sess, STATE_THINKING, now)
 
@@ -516,6 +519,10 @@ class SessionTable:
                 sess.open_tools.append(tuid)
             if isinstance(tool, str) and tool:
                 sess.current_tool = tool
+            # Clawdmeter fork: keep Bash's one-line description for GET /top.
+            tin = payload.get("tool_input")
+            desc = tin.get("description") if isinstance(tin, dict) else None
+            sess.current_detail = desc if tool == "Bash" and isinstance(desc, str) else None
             if tool == "AskUserQuestion":
                 self._set_state(sess, STATE_WAITING_QUESTION, now)
             else:
@@ -571,6 +578,7 @@ class SessionTable:
 
         elif event == "Stop":
             sess.current_tool = None
+            sess.current_detail = None  # Clawdmeter fork: cleared with current_tool
             sess.open_tools.clear()
             self._set_state(sess, STATE_IDLE, now)
             self._refresh_context(sess)
@@ -687,6 +695,17 @@ class SessionTable:
     def project(self, budget=DEFAULT_BUDGET_BYTES):
         return fit_payload(self.rows(), budget)
 
+    # Clawdmeter fork: the most urgent session's live tool, for the buddy text.
+    def top(self):
+        now = self.now_fn()
+        with self._lock:
+            if not self.sessions:
+                return None
+            s = min(self.sessions.values(),
+                    key=lambda s: (state_bucket(s.state), -s.last_event_at))
+            return {"state": s.state, "elapsed_s": max(0, int(now - s.state_since)),
+                    "tool": s.current_tool, "detail": s.current_detail}
+
 
 # ---------------------------------------------------------------------------
 # sessions.json handoff (Linux sidecar -> bash daemon)
@@ -781,7 +800,11 @@ class HookHandler(BaseHTTPRequestHandler):
         if not self._is_loopback():
             self.send_error(403)
             return
-        body = self.server.table.project(self.server.budget).encode("utf-8")
+        # Clawdmeter fork: /top is the buddy's view; / stays upstream's wire.
+        if self.path.split("?", 1)[0] == "/top":
+            body = json.dumps(self.server.table.top() or {}, ensure_ascii=False).encode("utf-8")
+        else:
+            body = self.server.table.project(self.server.budget).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
