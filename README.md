@@ -100,7 +100,22 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 | Idle over 30 min | `expression sleep` (claudepix) |
 | Anything else, or no session or sidecar | the device's own usage-rate rotation |
 
-The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch. Older firmware treats every buddy-only frame as a failed usage frame and shows "No data" after every state change until the next usage poll, up to 60 s later, so flash first.
+The same state becomes a short line of text under the animation, sent in the `"x"` field. It is at most 32 characters of plain ASCII and the device cuts anything longer with dots. Examples:
+
+| Session state | Text |
+|---|---|
+| Thinking | `Thinking` |
+| Responding | `Writing a reply` |
+| Reading, searching, editing | `Reading files`, `Searching code`, `Editing code` |
+| Running Bash | `Running: Install package dependencies` (cut to fit) |
+| Using a connector | `Using Amplitude` |
+| Waiting for a permission | `Permission: Editing code` |
+| Finished | `Done` |
+| Out of quota | `Out of quota` |
+
+The text comes from fixed phrases, the service name of an MCP connector, and the `description` Claude Code writes for each Bash call, usually a few words about what the command does. That description is the one piece of tool input the device shows. Command lines, file paths and prompts are never sent. No session, or idle between 3 and 30 min, shows no text.
+
+The installer asks before it sets this up. Claude Code reads hooks when a session starts, so only sessions you open after the install report their state. The device needs the firmware from this branch, which also draws the text. Older firmware treats every buddy-only frame as a failed usage frame and shows "No data" after every state change until the next usage poll, up to 60 s later, so flash first.
 
 Check that it works:
 
