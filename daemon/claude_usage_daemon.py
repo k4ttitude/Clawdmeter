@@ -721,17 +721,18 @@ def unpair_macos() -> bool:
 
 
 class BuddyLink:
-    """Mirrors live Claude Code state onto the splash via BLE field "a".
+    """Mirrors live Claude Code state onto the splash via BLE fields "a" and "x".
 
-    Inert when hook_port is unset. Buddy-only frames ({"a": name}) go out only
-    when the name changes; usage payloads always carry the current name, so a
-    rebooted or reconnected device recovers within one poll.
+    "a" is the animation name and "x" the short action text under it. Inert when
+    hook_port is unset. Buddy-only frames ({"a": name, "x": text}) go out only
+    when either one changes; usage payloads always carry both, so a rebooted or
+    reconnected device recovers within one poll.
     """
 
     def __init__(self, port: int | None) -> None:
         self.port = port
-        self.anim = ""          # what we believe the device shows
-        self._want = ""         # what the sidecar last said it should show
+        self.shown = ("", "")   # (animation, text) we believe the device shows
+        self._want = ("", "")   # (animation, text) the sidecar last said it should show
         # trust_env=False: a macOS system proxy must not capture the loopback GET.
         self._client = httpx.AsyncClient(trust_env=False) if port is not None else None
         self._logged_error = False
@@ -740,14 +741,14 @@ class BuddyLink:
         """Refresh self._want from the sidecar. Never writes to the device."""
         if self._client is None:
             return
-        # fetch_anim handles httpx errors itself. Anything else must not tear
-        # down the BLE session, so keep the previous animation and log once.
+        # buddy.fetch handles httpx errors itself. Anything else must not tear
+        # down the BLE session, so keep the previous pair and log once.
         try:
-            self._want = await buddy.fetch_anim(self._client, self.port, usage)
+            self._want = await buddy.fetch(self._client, self.port, usage)
         except Exception as e:
             if not self._logged_error:
                 self._logged_error = True
-                log(f"Buddy fetch failed, keeping '{self._want}': {e!r}")
+                log(f"Buddy fetch failed, keeping {self._want!r}: {e!r}")
             return
         self._logged_error = False
 
@@ -755,28 +756,29 @@ class BuddyLink:
         if self._client is None:
             return
         await self._fetch(usage)
-        if self._want != self.anim and await session.write_payload({"a": self._want}):
-            self.anim = self._want
+        want = self._want
+        if want != self.shown and await session.write_payload({"a": want[0], "x": want[1]}):
+            self.shown = want
 
     def stamp(self, payload: dict) -> None:
         if self._client is not None:
-            payload["a"] = self._want
+            payload["a"], payload["x"] = self._want
 
     async def send(self, session: "Session", payload: dict) -> bool:
-        """Write a usage or no-data frame stamped with a freshly fetched name.
+        """Write a usage or no-data frame stamped with a freshly fetched pair.
 
         The frame itself decides the limit case, so a poll that crosses into or
-        out of quota stamps "limit" (or not) on the same frame. The firmware has
-        one rx buffer, so a buddy-only frame right behind a usage frame can
-        overwrite it; stamping fresh means none is needed. A write that goes
-        through also becomes what we believe the device shows.
+        out of quota stamps "limit" and its text (or not) on the same frame. The
+        firmware has one rx buffer, so a buddy-only frame right behind a usage
+        frame can overwrite it; stamping fresh means none is needed. A write that
+        goes through also becomes what we believe the device shows.
         """
         if self._client is None:
             return await session.write_payload(payload)
         await self._fetch(payload)
         self.stamp(payload)
         if await session.write_payload(payload):
-            self.anim = payload["a"]
+            self.shown = (payload["a"], payload["x"])
             return True
         return False
 
@@ -866,8 +868,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     log("No usable token; signalling no-data to device — run "
                         "`claude login` or use the CLI to let Claude Code renew it")
                     # No data means no quota state either, so a stale "limit"
-                    # must not outlive it. The beat carries the current "a":
-                    # without one the firmware releases the buddy.
+                    # must not outlive it. The beat carries the current "a" and "x":
+                    # without "a" the firmware releases the buddy.
                     last_usage = None
                     if await link.send(session, {"ok": False}):
                         last_poll = time.time()
