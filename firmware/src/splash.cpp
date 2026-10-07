@@ -40,9 +40,16 @@ static int  canvas_h  = GRID * 8;
 #define COL_EMPTY    0x0000
 
 LV_FONT_DECLARE(font_styrene_28);
+LV_FONT_DECLARE(font_styrene_24);
+LV_FONT_DECLARE(font_styrene_20);
+
+// Grid rows TEXT_ROW0..GRID-1 are the band under the art for the host's action
+// text (an LVGL label, see splash_set_text). The art sits in rows 11..48.
+#define TEXT_ROW0    50
 
 static lv_obj_t *splash_container = NULL;
 static lv_obj_t *canvas = NULL;
+static lv_obj_t *text_label = NULL;       // host action text under the art
 static lv_obj_t *label_status = NULL;     // shown only when no animations loaded
 static uint16_t *canvas_buf = NULL;        // 480x480 RGB565 (PSRAM)
 
@@ -319,7 +326,10 @@ static void render_frame(const uint8_t *cells, const uint16_t *palette) {
     bool full = force_full || !prev_valid || palette != prev_palette;
     force_full = false;
 
-    int gx0 = 0, gy0 = 0, gx1 = GRID - 1, gy1 = GRID - 1;
+    // Grid rows 50..59 belong to the LVGL text label, so the direct draw stops
+    // at TEXT_ROW0 - 1. The art never reaches that band except the lowest "!"
+    // marks of `limit`, which get clipped.
+    int gx0 = 0, gy0 = 0, gx1 = GRID - 1, gy1 = TEXT_ROW0 - 1;
     if (!full) {                                     // bounding box of changed cells
         gx0 = GRID; gy0 = GRID; gx1 = -1; gy1 = -1;
         for (int gy = 0; gy < GRID; gy++)
@@ -331,9 +341,10 @@ static void render_frame(const uint8_t *cells, const uint16_t *palette) {
                     if (gy > gy1) gy1 = gy;
                 }
         if (gx1 < 0) return;                         // identical frame, nothing to do
+        if (gy1 > TEXT_ROW0 - 1) gy1 = TEXT_ROW0 - 1;
     }
 
-    blit_cells(cells, palette, gx0, gy0, gx1, gy1);
+    if (gy0 <= gy1) blit_cells(cells, palette, gx0, gy0, gx1, gy1);
 
     memcpy(prev_cells, cells, GRID * GRID);
     prev_palette = palette;
@@ -740,6 +751,24 @@ void splash_init(lv_obj_t *parent) {
     lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(label_status);
 
+    // Host action text, in the band under the art. A child created after the
+    // canvas, so it draws on top. One line, cut with dots when it is too wide.
+    {
+        const int mind_px = (c.width < c.height) ? c.width : c.height;
+        const int cell_px = mind_px / GRID;
+        const int off_y   = (c.height - GRID * cell_px) / 2;
+        const lv_font_t *tf = (mind_px >= 460) ? &font_styrene_24 : &font_styrene_20;
+        text_label = lv_label_create(splash_container);
+        lv_label_set_long_mode(text_label, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_style_text_font(text_label, tf, 0);
+        lv_obj_set_style_text_color(text_label, THEME_DIM, 0);
+        lv_obj_set_style_text_align(text_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_size(text_label, c.width - 40, lv_font_get_line_height(tf));
+        lv_obj_set_pos(text_label, 20, off_y + TEXT_ROW0 * cell_px + 4);
+        lv_label_set_text(text_label, "");
+        lv_obj_add_flag(text_label, LV_OBJ_FLAG_HIDDEN);
+    }
+
     resolve_group_lists();
 
     if (SPLASH_ANIM_COUNT == 0) {
@@ -979,4 +1008,19 @@ void splash_set_anim(const char *name) {
     // what is playing, or about to play, stays. forced_req keeps the name so a
     // repeat of it is a no-op.
     Serial.printf("splash: host asked for unknown anim '%s', ignoring\n", name);
+}
+
+// Host action text (BLE field "x") under the art. "" or NULL hides it, and a
+// repeat of the same text does nothing.
+static char text_req[48] = "";
+
+void splash_set_text(const char *text) {
+    if (!text) text = "";
+    if (strncmp(text, text_req, sizeof(text_req)) == 0) return;   // unchanged
+    strlcpy(text_req, text, sizeof(text_req));
+    Serial.printf("splash: text -> '%s'\n", text_req);
+    if (!text_label) return;
+    lv_label_set_text(text_label, text_req);
+    if (text_req[0]) lv_obj_clear_flag(text_label, LV_OBJ_FLAG_HIDDEN);
+    else             lv_obj_add_flag(text_label, LV_OBJ_FLAG_HIDDEN);
 }

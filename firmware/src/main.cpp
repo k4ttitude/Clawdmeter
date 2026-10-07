@@ -124,16 +124,19 @@ static bool parse_json(const char* json, UsageData* out) {
     return true;
 }
 
-// Host-named splash animation ("a"). Buddy-only frames ({"a":...} with no
+// Host-named splash animation ("a") and its action text ("x"). Buddy-only frames ({"a":...} with no
 // "ok") arrive between usage polls and must not touch usage: parse_json would
 // default ok to false ("No data") and feed usage_rate an extra sample, and its
 // 6-slot ring needs 240 s of span.
 enum AnimFrame { ANIM_ABSENT, ANIM_WITH_USAGE, ANIM_ONLY };
-static AnimFrame parse_anim(const char* json, char* out, size_t n) {
+static AnimFrame parse_host(const char* json, char* out, size_t n,
+                            char* text, size_t tn) {
     JsonDocument doc;
     if (deserializeJson(doc, json)) return ANIM_ABSENT;
     if (!doc["a"].is<const char*>()) return ANIM_ABSENT;
     strlcpy(out, doc["a"].as<const char*>(), n);
+    text[0] = '\0';
+    if (doc["x"].is<const char*>()) strlcpy(text, doc["x"].as<const char*>(), tn);
     return doc["ok"].isNull() ? ANIM_ONLY : ANIM_WITH_USAGE;
 }
 
@@ -390,9 +393,11 @@ void loop() {
         char raw[512];
         strlcpy(raw, ble_get_data(), sizeof(raw));
         char anim[24] = "";
-        AnimFrame af = parse_anim(raw, anim, sizeof(anim));
+        char text[48] = "";
+        AnimFrame af = parse_host(raw, anim, sizeof(anim), text, sizeof(text));
         if (af == ANIM_ONLY) {
             splash_set_anim(anim);
+            splash_set_text(text);
             ble_send_ack();
         } else if (parse_json(raw, &usage)) {
             int g_before = usage_rate_group();
@@ -412,6 +417,7 @@ void loop() {
             }
             // Absent "a" (stock daemon, buddy off) hands control back.
             splash_set_anim(af == ANIM_WITH_USAGE ? anim : "");
+            splash_set_text(af == ANIM_WITH_USAGE ? text : "");
             ui_update(&usage);
             ble_send_ack();
         } else {

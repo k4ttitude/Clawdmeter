@@ -1,0 +1,5 @@
+# Buddy text: usage+laptop with a Bash description, buddy-only permission, a long text, release.
+{"s":40,"sr":120,"w":20,"wr":3000,"st":"allowed","ok":true,"a":"laptop","x":"Running: Install package deps","name":"usage+text","hold_ms":4000}
+{"a":"allow","x":"Permission: Running a command","name":"permission","hold_ms":4000}
+{"a":"magnifier","x":"Thinking","name":"thinking","hold_ms":4000}
+{"a":"","x":"","name":"released","hold_ms":3000}

@@ -27,6 +27,10 @@ void splash_pick_for_current_rate(void);
 // repeating the current name is a no-op.
 void splash_set_anim(const char *name);
 
+// Host action text (BLE field "x"), drawn under the animation. "" or NULL hides
+// it; repeating the same text is a no-op.
+void splash_set_text(const char *text);
+
 // True when splash is currently rendering (used to gate re-picks).
 bool splash_is_active(void);
 
