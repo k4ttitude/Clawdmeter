@@ -214,3 +214,81 @@ def test_usage_frames_carry_current_anim_and_text_and_no_buddy_only_frame_follow
         {**OK, **writing},
     ]
     assert not [w for w in writes if set(w) == {"a", "x"}], writes
+
+
+def _first_iteration_writes(poll_result):
+    """Drive one loop iteration (BUDDY_TICK is longer than the run) against a
+    sidecar whose answer changes after its first reply. Returns the writes."""
+    import httpx
+
+    writes, answers = [], [
+        '{"state": 3, "elapsed_s": 0, "tool": null, "detail": null}',   # laptop
+        '{"state": 6, "elapsed_s": 0, "tool": null, "detail": null}',   # allow
+    ]
+
+    async def fake_poll():
+        return poll_result
+
+    async def record(_self, payload):
+        writes.append(dict(payload))
+        return True
+
+    def sidecar(_request):
+        return httpx.Response(200, text=answers.pop(0) if len(answers) > 1 else answers[0])
+
+    real_client = httpx.AsyncClient
+
+    def fake_async_client(**kw):
+        return real_client(transport=httpx.MockTransport(sidecar), **kw)
+
+    async def go():
+        stop = asyncio.Event()
+        task = asyncio.create_task(mod.connect_and_run("addr", stop))
+        await asyncio.sleep(0.2)
+        stop.set()
+        await asyncio.wait_for(task, 3)
+
+    with patch.object(mod, "BleakClient", _FakeClient), \
+         patch.object(mod, "poll_active", fake_poll), \
+         patch.object(mod, "BUDDY_TICK", 0.5), \
+         patch.object(mod, "POLL_INTERVAL", 60), \
+         patch.object(mod.httpx, "AsyncClient", fake_async_client), \
+         patch.object(mod.buddy, "read_hook_port", lambda _p: 45999), \
+         patch.object(mod.Session, "write_payload", record):
+        asyncio.run(go())
+    return writes
+
+
+def test_no_buddy_only_frame_right_behind_a_usage_frame():
+    # The firmware has one rx buffer. If /top changes between the usage frame's
+    # fetch and the step's fetch, the step must wait for the next iteration.
+    writes = _first_iteration_writes((dict(OK), False))
+    assert writes == [{**OK, "a": "laptop", "x": "Writing a reply"}], writes
+
+
+def test_no_buddy_only_frame_right_behind_a_dead_token_beat():
+    writes = _first_iteration_writes((None, True))
+    assert writes == [{"ok": False, "a": "laptop", "x": "Writing a reply"}], writes
+
+
+def test_worst_case_frame_fits_one_ble_write():
+    # NimBLE's preferred ATT MTU is 255 and the daemon writes without response,
+    # so a frame is at most 255 - 3 = 252 bytes. Pin 244 to keep a margin.
+    # Worst case: the enterprise fields, every opt-in field, the longest animation
+    # name, and 32 quote characters, which JSON escapes to 64 bytes.
+    from daemon import buddy
+    payload = {
+        "s": 100, "sr": 44640, "w": 100, "wr": 10080, "st": "allowed_warning",
+        "acct": "ent", "tp": 100, "pd": 31, "rd": "Sep 30", "ok": True,
+        "c": 1, "t": 2_000_000_000, "tf": 12,
+        "a": "expression surprise", "x": '"' * buddy.MAX_TEXT,
+    }
+    sent = []
+
+    class Client:
+        async def write_gatt_char(self, _uuid, data, response):
+            sent.append(bytes(data))
+
+    assert asyncio.run(mod.Session(Client()).write_payload(payload)) is True
+    print(f"worst-case frame: {len(sent[0])} bytes")
+    assert len(sent[0]) <= 244, len(sent[0])

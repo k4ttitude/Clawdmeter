@@ -8,13 +8,14 @@ where one fits, the claudepix sprites in buddy_animations.h where none does.
 
 The same answer also becomes a short line of text under the animation. The text
 is built only from fixed phrases, an MCP service name and Bash's own
-description. It never carries a command line, a path, a prompt or the sidecar's
-cwd-derived label. "" hides the line.
+description, shown as Claude wrote it (so it may name a file). It never carries a
+command line, a prompt or the sidecar's cwd-derived label. "" hides the line.
 """
 from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -27,6 +28,7 @@ JUST_DONE_S = 180        # idle this short still reads as "done"
 SLEEP_AFTER_S = 1800     # idle this long falls asleep
 FETCH_TIMEOUT_S = 0.5
 MAX_TEXT = 32            # the device line is short, and its fonts cover ASCII 32..126 only
+# Frame budget: a BLE write is at most 252 bytes (ATT MTU 255 minus 3); tests/test_macos_buddy.py pins the worst case.
 
 DONE = "jumping happy"   # official
 _BY_STATE = {
@@ -111,16 +113,30 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 _NOT_ASCII_PRINTABLE = re.compile(r"[^\x20-\x7e]")
 
 
-def top_session(body: str) -> tuple[int, int, str | None, str | None] | None:
-    """(state, elapsed_s, tool, detail) from a /top body, or None for {} or garbage."""
+def _parse_top(body: str) -> tuple[tuple[int, int, str | None, str | None] | None, bool]:
+    """((state, elapsed_s, tool, detail) or None, answered_in_the_old_wire)."""
     try:
         top = json.loads(body)
+        ss = top.get("ss")
+        if isinstance(ss, list):
+            # A sidecar from before the /top route ignores the path and answers
+            # with the "/" wire. Its first row is already the most urgent
+            # session, but it carries no tool name or detail.
+            if not ss:
+                return None, True
+            row = ss[0]
+            return (int(row[2]), int(row[4]), None, None), True
         tool, detail = top.get("tool"), top.get("detail")
-        return (int(top["state"]), int(top["elapsed_s"]),
-                tool if isinstance(tool, str) else None,
-                detail if isinstance(detail, str) else None)
-    except (ValueError, KeyError, TypeError, AttributeError):
-        return None
+        return ((int(top["state"]), int(top["elapsed_s"]),
+                 tool if isinstance(tool, str) else None,
+                 detail if isinstance(detail, str) else None), False)
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None, False
+
+
+def top_session(body: str) -> tuple[int, int, str | None, str | None] | None:
+    """(state, elapsed_s, tool, detail) from a /top body, or None for {} or garbage."""
+    return _parse_top(body)[0]
 
 
 def _limited(usage: dict | None) -> bool:
@@ -213,6 +229,21 @@ def action_text(top: tuple | None, usage: dict | None) -> str:
     return _TEXT_BY_STATE.get(state, "")
 
 
+_warned_old_sidecar = False
+
+
+def _warn_old_sidecar() -> None:
+    """Say once per daemon run that the sidecar predates /top. Same format as the
+    daemon's log(), which buddy.py cannot import (the daemon imports this module)."""
+    global _warned_old_sidecar
+    if _warned_old_sidecar:
+        return
+    _warned_old_sidecar = True
+    print(f"[{time.strftime('%H:%M:%S')}] Buddy: the session sidecar is older than the "
+          "daemon, so the action text lacks tool names. Restart it with: "
+          "launchctl kickstart -k gui/$UID/com.user.clawdmeter-sessions", flush=True)
+
+
 async def fetch(client: httpx.AsyncClient, port: int, usage: dict | None) -> tuple[str, str]:
     """(animation, text) for right now, both from one /top answer.
 
@@ -224,5 +255,7 @@ async def fetch(client: httpx.AsyncClient, port: int, usage: dict | None) -> tup
         resp.raise_for_status()
     except httpx.HTTPError:
         return ("limit", QUOTA_TEXT) if _limited(usage) else ("", "")
-    top = top_session(resp.text)
+    top, old_wire = _parse_top(resp.text)
+    if old_wire:
+        _warn_old_sidecar()
     return pick(top, usage), action_text(top, usage)

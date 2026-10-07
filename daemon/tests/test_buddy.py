@@ -217,3 +217,30 @@ def test_every_action_text_is_short_ascii():
                         text = buddy.action_text((st, el, tool, detail), usage)
                         assert len(text) <= buddy.MAX_TEXT, text
                         assert all(32 <= ord(ch) <= 126 for ch in text), repr(text)
+
+
+# An old sidecar (started before the /top route) answers GET /top with the "/" wire.
+OLD_WIRE = json.dumps({"ss": [["sid1", "myproj", 4, 55, 7, "opus", 3],
+                              ["sid2", "other", 1, 10, 900, "opus", 0]]})
+
+
+def test_top_session_reads_an_old_sidecar_body():
+    assert buddy.top_session(OLD_WIRE) == (4, 7, None, None)
+    assert buddy.top_session('{"ss": []}') is None
+    assert buddy.top_session('{"ss": [["sid", "x", "bad", 1, 2]]}') is None
+    assert buddy.top_session('{"ss": [["sid", "x"]]}') is None
+
+
+def test_fetch_old_sidecar_body_keeps_the_buddy_alive(monkeypatch):
+    monkeypatch.setattr(buddy, "_warned_old_sidecar", False)
+    assert _fetch(lambda r: httpx.Response(200, text=OLD_WIRE)) == ("laptop", "Running a tool")
+
+
+def test_old_sidecar_is_logged_once_per_run(monkeypatch, capsys):
+    monkeypatch.setattr(buddy, "_warned_old_sidecar", False)
+    handler = lambda r: httpx.Response(200, text=OLD_WIRE)  # noqa: E731
+    _fetch(handler)
+    _fetch(handler)
+    out = capsys.readouterr().out
+    assert out.count("older than the daemon") == 1
+    assert "launchctl kickstart -k gui/$UID/com.user.clawdmeter-sessions" in out

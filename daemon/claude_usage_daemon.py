@@ -841,6 +841,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
         while client.is_connected and not stop_event.is_set():
             now = time.time()
             elapsed = now - last_poll
+            sent = False   # a usage or no-data frame went out this iteration
             if now >= next_poll_try and (
                     session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL):
                 session.refresh_requested.clear()
@@ -859,6 +860,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                         last_poll = time.time()
                         used_successfully = True
                         polled_ok = True
+                        sent = True
                 elif dead:
                     # No live token in any config dir (missing, or a 401/expired
                     # token) -> show "No data" now instead of stale numbers. Guard
@@ -874,6 +876,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     if await link.send(session, {"ok": False}):
                         last_poll = time.time()
                         polled_ok = True
+                        sent = True
                 else:
                     # Transient poll failure (a live token that didn't answer this
                     # cycle) -> stay silent and retry next tick.
@@ -881,7 +884,11 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 if not polled_ok:
                     next_poll_try = time.time() + TICK
 
-            await link.step(session, last_usage)
+            # A buddy-only frame right behind a usage frame can overwrite the
+            # firmware's single rx buffer before it is read. The usage frame
+            # already carried a fresh pair, so the next iteration catches any change.
+            if not sent:
+                await link.step(session, last_usage)
 
             tick = BUDDY_TICK if link.port is not None else TICK
             if session.refresh_requested.is_set() and time.time() < next_poll_try:
