@@ -29,6 +29,11 @@ def test_top_session_empty_or_garbage_is_none():
     assert buddy.top_session('{"state": "x", "elapsed_s": 1}') is None
 
 
+def test_top_session_non_string_tool_or_detail_becomes_none():
+    body = '{"state": 4, "elapsed_s": 1, "tool": 5, "detail": ["x"]}'
+    assert buddy.top_session(body) == (4, 1, None, None)
+
+
 def test_mapping_table():
     cases = [
         ((6, 0, None, None), "allow"), ((7, 0, None, None), "allow"),

@@ -111,25 +111,6 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 _NOT_ASCII_PRINTABLE = re.compile(r"[^\x20-\x7e]")
 
 
-def read_hook_port(config_file: Path) -> int | None:
-    """hook_port from the daemon config, or None (buddy off)."""
-    try:
-        text = config_file.read_text()
-    except OSError:
-        return None
-    for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip().lower() == "hook_port":
-            try:
-                return int(val.strip())
-            except ValueError:
-                return None
-    return None
-
-
 def top_session(body: str) -> tuple[int, int, str | None, str | None] | None:
     """(state, elapsed_s, tool, detail) from a /top body, or None for {} or garbage."""
     try:
